@@ -1,87 +1,54 @@
-# Member 4 - Auth & Database Module
-# PocketSmart-AI - Authentication System
+# backend/auth.py - Member 4 - MongoDB + JWT + History
+import os
+import jwt
+import bcrypt
+from datetime import datetime, timedelta
+from backend.database import get_user_collection, get_history_collection
 
-import sqlite3
-import hashlib
-from datetime import datetime
+SECRET_KEY = os.getenv("JWT_SECRET", "pocketsmart_secret_key")
+ALGORITHM = "HS256"
 
-class AuthManager:
-    def __init__(self, db_path="pocketsmart.db"):
-        self.db_path = db_path
-        self.init_db()
-    
-    def init_db(self):
-        """Database table create pannum"""
-        conn = sqlite3.connect(self.db_path)
-        cursor = conn.cursor()
-        
-        # Users table
-        cursor.execute('''
-            CREATE TABLE IF NOT EXISTS users (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                username TEXT UNIQUE NOT NULL,
-                email TEXT UNIQUE NOT NULL,
-                password_hash TEXT NOT NULL,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-            )
-        ''')
-        
-        # Budget table
-        cursor.execute('''
-            CREATE TABLE IF NOT EXISTS budgets (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                user_id INTEGER,
-                amount REAL,
-                category TEXT,
-                date TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                FOREIGN KEY (user_id) REFERENCES users (id)
-            )
-        ''')
-        
-        conn.commit()
-        conn.close()
-        print("Database initialized successfully!")
+def hash_password(password: str) -> str:
+    return bcrypt.hashpw(password.encode('utf-8'), bcrypt.gensalt()).decode('utf-8')
 
-    def hash_password(self, password):
-        """Password ah secure ah maathum"""
-        return hashlib.sha256(password.encode()).hexdigest()
+def verify_password(password: str, hashed: str) -> bool:
+    return bcrypt.checkpw(password.encode('utf-8'), hashed.encode('utf-8'))
 
-    def register_user(self, username, email, password):
-        """Puthu user register pannum"""
-        try:
-            conn = sqlite3.connect(self.db_path)
-            cursor = conn.cursor()
-            password_hash = self.hash_password(password)
-            
-            cursor.execute(
-                "INSERT INTO users (username, email, password_hash) VALUES (?, ?, ?)",
-                (username, email, password_hash)
-            )
-            conn.commit()
-            conn.close()
-            return True, "User registered successfully!"
-        except Exception as e:
-            return False, f"Error: {str(e)}"
+def create_jwt(user_id: str) -> str:
+    payload = {"user_id": str(user_id), "exp": datetime.utcnow() + timedelta(days=7)}
+    return jwt.encode(payload, SECRET_KEY, algorithm=ALGORITHM)
 
-    def login_user(self, username, password):
-        """User login check pannum"""
-        conn = sqlite3.connect(self.db_path)
-        cursor = conn.cursor()
-        password_hash = self.hash_password(password)
-        
-        cursor.execute(
-            "SELECT * FROM users WHERE username=? AND password_hash=?",
-            (username, password_hash)
-        )
-        user = cursor.fetchone()
-        conn.close()
-        
-        if user:
-            return True, "Login successful!"
-        else:
-            return False, "Invalid credentials!"
+def verify_jwt(token: str):
+    try:
+        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+        return payload["user_id"]
+    except:
+        return None
 
-# Test code
-if __name__ == "__main__":
-    auth = AuthManager()
-    print("Auth Module Ready - Member 4 Work Completed")
+def register_user(email, password):
+    users = get_user_collection()
+    if users.find_one({"email": email}):
+        return None
+    hashed = hash_password(password)
+    result = users.insert_one({"email": email, "password": hashed, "created_at": datetime.utcnow()})
+    return create_jwt(result.inserted_id)
+
+def login_user(email, password):
+    users = get_user_collection()
+    user = users.find_one({"email": email})
+    if user and verify_password(password, user["password"]):
+        return create_jwt(user["_id"])
+    return None
+
+def save_recommendation_history(user_id, product, recommendation):
+    history = get_history_collection()
+    history.insert_one({
+        "user_id": str(user_id),
+        "product": product,
+        "recommendation": recommendation,
+        "timestamp": datetime.utcnow()
+    })
+
+def get_user_history(user_id):
+    history = get_history_collection()
+    return list(history.find({"user_id": str(user_id)}).sort("timestamp", -1))
